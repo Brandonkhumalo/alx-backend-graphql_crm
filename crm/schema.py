@@ -2,23 +2,34 @@ import re
 import graphene
 from django.utils.timezone import now
 from django.db import transaction
-from graphene import Mutation, Field, List, String, Int, Decimal as GrapheneDecimal, ID
+from graphene import Mutation, Field
+from graphene_django.filter import DjangoFilterConnectionField
+from graphene_django.types import DjangoObjectType
+from django.db.models import Sum
 from .models import Customer, Product, Order
 from .types import CustomerType, ProductType, OrderType
-from graphene_django.filter import DjangoFilterConnectionField
 from .filters import CustomerFilter, ProductFilter, OrderFilter
+
 
 def is_valid_phone(phone):
     return re.match(r"^(\+?\d{10,15}|\d{3}-\d{3}-\d{4})$", phone or "")
 
-class CreateCustomer(Mutation):
-    class Arguments:
-        name = String(required=True)
-        email = String(required=True)
-        phone = String()
 
-    customer = Field(CustomerType)
-    message = String()
+# Define CustomerInput outside mutation for better IDE support
+class CustomerInput(graphene.InputObjectType):
+    name = graphene.String(required=True)
+    email = graphene.String(required=True)
+    phone = graphene.String()
+
+
+class CreateCustomer(graphene.Mutation):
+    class Arguments:
+        name = graphene.String(required=True)
+        email = graphene.String(required=True)
+        phone = graphene.String()
+
+    customer = graphene.Field(CustomerType)
+    message = graphene.String()
 
     def mutate(self, info, name, email, phone=None):
         if Customer.objects.filter(email=email).exists():
@@ -29,17 +40,13 @@ class CreateCustomer(Mutation):
         customer.save()
         return CreateCustomer(customer=customer, message="Customer created successfully.")
 
-class BulkCreateCustomers(Mutation):
-    class CustomerInput(graphene.InputObjectType):
-        name = String(required=True)
-        email = String(required=True)
-        phone = String()
 
+class BulkCreateCustomers(graphene.Mutation):
     class Arguments:
-        input = List(CustomerInput)
+        input = graphene.List(CustomerInput)
 
-    customers = List(CustomerType)
-    errors = List(String)
+    customers = graphene.List(CustomerType)
+    errors = graphene.List(graphene.String)
 
     def mutate(self, info, input):
         customers = []
@@ -59,13 +66,14 @@ class BulkCreateCustomers(Mutation):
 
         return BulkCreateCustomers(customers=customers, errors=errors)
 
-class CreateProduct(Mutation):
-    class Arguments:
-        name = String(required=True)
-        price = GrapheneDecimal(required=True)
-        stock = Int(required=False, default_value=0)
 
-    product = Field(ProductType)
+class CreateProduct(graphene.Mutation):
+    class Arguments:
+        name = graphene.String(required=True)
+        price = graphene.Decimal(required=True)
+        stock = graphene.Int(required=False, default_value=0)
+
+    product = graphene.Field(ProductType)
 
     def mutate(self, info, name, price, stock=0):
         if price <= 0:
@@ -76,13 +84,14 @@ class CreateProduct(Mutation):
         product.save()
         return CreateProduct(product=product)
 
-class CreateOrder(Mutation):
-    class Arguments:
-        customer_id = ID(required=True)
-        product_ids = List(ID, required=True)
-        order_date = String(required=False)
 
-    order = Field(OrderType)
+class CreateOrder(graphene.Mutation):
+    class Arguments:
+        customer_id = graphene.ID(required=True)
+        product_ids = graphene.List(graphene.ID, required=True)
+        order_date = graphene.String(required=False)
+
+    order = graphene.Field(OrderType)
 
     def mutate(self, info, customer_id, product_ids, order_date=None):
         try:
@@ -101,19 +110,58 @@ class CreateOrder(Mutation):
 
         order = Order(customer=customer, total_amount=total)
         if order_date:
-            order.order_date = order_date
+            order.order_date = order_date  # Consider parsing if needed
         order.save()
         order.products.set(products)
 
         return CreateOrder(order=order)
+
+
+class UpdateLowStockProducts(graphene.Mutation):
+    class Arguments:
+        pass
+
+    updated_products = graphene.List(ProductType)
+    message = graphene.String()
+
+    def mutate(self, info):
+        low_stock_products = Product.objects.filter(stock__lt=10)
+        updated_products = []
+        for product in low_stock_products:
+            product.stock += 10
+            product.save()
+            updated_products.append(product)
+        return UpdateLowStockProducts(
+            updated_products=updated_products,
+            message=f"{len(updated_products)} product(s) restocked successfully."
+        )
+
+
+class Query(graphene.ObjectType):
+    total_customers = graphene.Int()
+    total_orders = graphene.Int()
+    total_revenue = graphene.Float()
+
+    all_customers = DjangoFilterConnectionField(CustomerType, filterset_class=CustomerFilter)
+    all_products = DjangoFilterConnectionField(ProductType, filterset_class=ProductFilter)
+    all_orders = DjangoFilterConnectionField(OrderType, filterset_class=OrderFilter)
+
+    def resolve_total_customers(root, info):
+        return Customer.objects.count()
+
+    def resolve_total_orders(root, info):
+        return Order.objects.count()
+
+    def resolve_total_revenue(root, info):
+        return Order.objects.aggregate(total=Sum('total_amount'))['total'] or 0.0
+
 
 class Mutation(graphene.ObjectType):
     create_customer = CreateCustomer.Field()
     bulk_create_customers = BulkCreateCustomers.Field()
     create_product = CreateProduct.Field()
     create_order = CreateOrder.Field()
+    update_low_stock_products = UpdateLowStockProducts.Field()
 
-class Query(graphene.ObjectType):
-    all_customers = DjangoFilterConnectionField(CustomerType, filterset_class=CustomerFilter)
-    all_products = DjangoFilterConnectionField(ProductType, filterset_class=ProductFilter)
-    all_orders = DjangoFilterConnectionField(OrderType, filterset_class=OrderFilter)
+
+schema = graphene.Schema(query=Query, mutation=Mutation)
