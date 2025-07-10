@@ -1,26 +1,33 @@
 import datetime
-import requests
+from gql import gql, Client
+from gql.transport.requests import RequestsHTTPTransport
 
 def log_crm_heartbeat():
     timestamp = datetime.datetime.now().strftime("%d/%m/%Y-%H:%M:%S")
     message = f"{timestamp} CRM is alive\n"
-    
+
+    # Setup GraphQL client
+    transport = RequestsHTTPTransport(
+        url='http://localhost:8000/graphql',
+        verify=True,
+        retries=3,
+    )
+
+    client = Client(transport=transport, fetch_schema_from_transport=True)
+
     try:
-        # Optional GraphQL hello query
-        response = requests.post(
-            'http://localhost:8000/graphql',
-            json={'query': '{ hello }'},
-            timeout=5
-        )
-        if response.ok:
-            message = f"{timestamp} CRM is alive (GraphQL OK)\n"
+        query = gql('{ hello }')
+        result = client.execute(query)
+        if 'hello' in result:
+            message = f"{timestamp} CRM is alive (GraphQL OK: {result['hello']})\n"
         else:
-            message = f"{timestamp} CRM is alive (GraphQL ERROR)\n"
+            message = f"{timestamp} CRM is alive (GraphQL RESPONSE ERROR)\n"
     except Exception:
         message = f"{timestamp} CRM is alive (GraphQL TIMEOUT)\n"
 
     with open("/tmp/crm_heartbeat_log.txt", "a") as f:
         f.write(message)
+
 
 def update_low_stock():
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
