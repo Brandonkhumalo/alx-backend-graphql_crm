@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
 # This script deletes customers who have been inactive for over a year.
 # It navigates to the Django root directory and runs cleanup using a Django shell command.
